@@ -8,12 +8,11 @@ export default function WalletConnector() {
   const activeAddress = useActiveAddress();
 
   return (
-    <div style={{ border: '1px solid #ccc', padding: '20px', borderRadius: '8px', maxWidth: '500px' }}>
-      <h2>Wallet Connection</h2>
+    <div style={{ border: '1px solid #ccc', padding: '5px', borderRadius: '5px', minWidth: '200px' }}>
       <ConnectButton profileModal={true} showBalance={false} />
       {connected && (
-        <div style={{ marginTop: '10px' }}>
-          <p><strong>Active Address:</strong> {activeAddress}</p>
+        <div style={{ marginTop: '5px', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <p><strong>Address:</strong> {activeAddress?.substring(0, 8)}...{activeAddress?.substring(activeAddress.length - 4)}</p>
         </div>
       )}
     </div>

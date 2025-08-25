@@ -1,115 +1,264 @@
 // src/components/AIBox.jsx
 import React, { useState } from 'react';
 import { useConnection } from '@arweave-wallet-kit/react';
-import { connect, createSigner } from '@permaweb/aoconnect';
+import { message, dryrun, createDataItemSigner } from '@permaweb/aoconnect';
 
 export default function AIBox() {
   const { connected } = useConnection(); // Check if wallet is connected
 
-  const [prompt, setPrompt] = useState('');
+  const [messageId, setMessageId] = useState(''); // Stores the Arweave message ID
+  const [code, setCode] = useState(''); // Stores the fetched code
+  const [status, setStatus] = useState(''); // Stores the current status
   const [requestReference, setRequestReference] = useState(''); // Stores the reference for the sent request
   const [aiResult, setAiResult] = useState(''); // Stores the fetched AI result
+  const [taskRef, setTaskRef] = useState(''); // Stores the task reference
+  const [resultStatus, setResultStatus] = useState(''); // Stores the result status
+  const [llmData, setLlmData] = useState(''); // Stores the LLM data
+  const [attestation, setAttestation] = useState(''); // Stores the attestation
+  const [showAttestation, setShowAttestation] = useState(false); // Controls attestation visibility
 
-  const YOUR_AO_PROCESS_ID = '-MGlzBNikS86-QKR6B-6lxxoabC5pMGYoGxKWk5QVFg'; // <-- IMPORTANT: Replace with your actual AO Process ID
-  const APUS_HYPERBEAM_NODE_URL = `http://72.46.85.207:8734`;
+  const YOUR_AO_PROCESS_ID = 'rnrMBoIP3GdpCzwWl7IJ-X3duZ5YfSbWYLhlDCy_h2Y'; // <-- IMPORTANT: Replace with your actual AO Process ID
 
-  // --- aoconnect setup for HyperBEAM ---
-  // Connect aoconnect to the APUS HyperBEAM Node using the connected browser wallet as signer.
-  // This setup should ideally be done once at a higher level (e.g., App.jsx or context provider)
-  // in a real application to avoid re-initialization.
-  const { request } = connect({
-    MODE: "mainnet", 
-    URL: APUS_HYPERBEAM_NODE_URL,
-    signer: createSigner(window.arweaveWallet),
-  });
-
-  const handleSendPrompt = async () => {
-    if (!connected) { alert('Please connect your wallet first.'); return; }
-    if (!prompt.trim()) { alert('Prompt cannot be empty.'); return; }
-
-    setAiResult(''); // Clear previous result
-    let ref = Date.now().toString()
-    setRequestReference(ref); // Set new reference
-
-    try {
-      // Send message to your AO process using aoconnect.request
-      const data = await request({
-        type: 'Message',
-        path: `/${YOUR_AO_PROCESS_ID}~process@1.0/push/serialize~json@1.0`,
-        method: "POST",
-        'data-protocol': 'ao',
-        variant: 'ao.N.1',
-        "accept-bundle": "true",
-        "accept-codec": "httpsig@1.0",
-        signingFormat: "ANS-104",
-        target: YOUR_AO_PROCESS_ID,
-        Action: "Infer",
-        // your tags
-        // ...tags.filter(t => t.name !== 'device').reduce((a, t) => assoc(t.name, t.value, a), {}),
-        'X-Reference': ref, // Unique reference for this request
-        data: prompt, // The AI prompt to send
-      });
-      console.log(data)
-
-      console.log('Prompt sent. Check "Sent Request Ref" for fetching results.');
-
-    } catch (error) {
-      console.error('Failed to send prompt:', error);
-      setAiResult(`Error sending prompt: ${error.message}`);
+  const handleFetchCode = async () => {
+    if (!messageId.trim()) { 
+      alert('Please enter a message ID.'); 
+      return; 
     }
-  };
 
-  const handleFetchResult = async () => {
-    if (!requestReference) { alert('Please send a prompt first to get a reference.'); return; }
-
-    setAiResult(''); // Clear previous result
+    setStatus('Fetching code...');
+    setCode('');
+    setAiResult('');
 
     try {
-      // Construct the URL to query your AO process's exposed cache via patch@1.0
-      // This assumes your backend Lua uses 'patch@1.0' to expose Results[clientRequestRef]
-      const resultApiUrl = 
-        `${APUS_HYPERBEAM_NODE_URL}/${YOUR_AO_PROCESS_ID}~process@1.0/now/cache/results/${YOUR_AO_PROCESS_ID}-${requestReference}/serialize~json@1.0`;
-      
-      console.log("Fetching result from URL:", resultApiUrl);
-
-      const response = await fetch(resultApiUrl);
+      const response = await fetch(`https://arweave.net/${messageId}`);
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       
-      const data = await response.json(); // Data from patch is already JSON
-      setAiResult(data.body); // Set the AI result to state
+      const codeText = await response.text();
+      setCode(codeText);
+      setStatus('Code fetched successfully. Click "Evaluate Code" to analyze.');
+    } catch (error) {
+      console.error('Failed to fetch code:', error);
+      setStatus(`Error fetching code: ${error.message}`);
+    }
+  };
 
+  const handleEvaluateCode = async () => {
+    if (!connected) { 
+      alert('Please connect your wallet first.'); 
+      return; 
+    }
+    
+    if (!code) { 
+      alert('Please fetch code first.'); 
+      return; 
+    }
+
+    setStatus('Processing...');
+    setAiResult('');
+    let ref = Date.now().toString();
+    setRequestReference(ref);
+    let Options = {
+      "reference": ref,
+      "max_tokens": 512,
+    }
+    try {
+      // Create the evaluation prompt
+      const evaluationPrompt = `"Review the following code with a focus on security and data leakage risks. Provide a concise response including: Key strengths (secure practices, safe handling) Key weaknesses (bugs, vulnerabilities, possible leaks) A final security rating (0–5)Code:${code}"`;
+      
+      // Send message to your AO process using aoconnect.message
+      const messageId = await message({
+        process: YOUR_AO_PROCESS_ID,
+        tags: [
+          { name: "Action", value: "SendRequest" },
+          { name: "X-Prompt", value: evaluationPrompt },
+          { name: "X-Options", value: JSON.stringify(Options) }
+        ],
+        signer: createDataItemSigner(window.arweaveWallet),
+      });
+      console.log(messageId);
+
+      setTaskRef(ref); // Set the taskRef variable
+      setStatus('Code sent for evaluation. Click "Fetch Result" to see the analysis.');
+    } catch (error) {
+      console.error('Failed to send code for evaluation:', error);
+      setStatus(`Error sending code: ${error.message}`);
+    }
+  };
+
+  const handleFetchResult = async () => {
+    if (!requestReference) { 
+      alert('Please evaluate code first to get a reference.'); 
+      return; 
+    }
+    console.log(requestReference);
+    setStatus('Fetching result...');
+    setAiResult('');
+
+    try {
+      // Use dryrun to fetch the result from the AO process
+      const result = await dryrun({
+        process: YOUR_AO_PROCESS_ID,
+        data: '',
+        tags: [{ name: 'Action', value: 'GetResult' }, { name: 'Taskref', value: requestReference }],
+      });
+
+      console.log(result);
+
+      if (result.Messages && result.Messages.length > 0) {
+        const aiResult = result.Messages[0].Data;
+        setAiResult(aiResult);
+        
+        // Parse the JSON result
+        try {
+          const parsedResult = JSON.parse(aiResult);
+          setResultStatus(parsedResult.status);
+          setLlmData(parsedResult.data);
+          setAttestation(parsedResult.attestation);
+        } catch (parseError) {
+          console.error('Failed to parse JSON result:', parseError);
+        }
+        
+        setStatus('Result received');
+      } else {
+        setStatus('No result found');
+      }
     } catch (error) {
       console.error('Failed to fetch result:', error);
-      setAiResult(`Error fetching result: ${error.message}`);
+      setStatus(`Error fetching result: ${error.message}`);
     }
   };
 
   return (
-    <div style={{ border: '1px solid #ccc', padding: '20px', borderRadius: '8px', maxWidth: '500px' }}>
-      <h2>APUS AI Box</h2>
-      <p><strong>Your AO Process ID:</strong> {YOUR_AO_PROCESS_ID}</p> 
-
-      <textarea
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-        placeholder="Enter your AI prompt here..."
-        rows="4"
-        style={{ width: '100%', padding: '10px', marginBottom: '10px' }}
-      />
-      <button onClick={handleSendPrompt} disabled={!connected}>
-        Send Prompt
-      </button>
-      <button onClick={handleFetchResult} disabled={!requestReference}>
-        Fetch Result
-      </button>
-
-      <div style={{ marginTop: '20px' }}>
-        <h3>Details:</h3>
-        <p><strong>Sent Request Ref:</strong> {requestReference || 'N/A'}</p>
-        <p><strong>AI Result:</strong> {aiResult || 'N/A'}</p>
+    <div style={{ border: '1px solid #ccc', padding: '20px', borderRadius: '8px', maxWidth: '1000px', margin: '0 auto' }}>
+      <h2>Sentinel AI on AO</h2>
+      <p><strong>Sentinel Process ID:</strong> {YOUR_AO_PROCESS_ID}</p> 
+      
+      {/* Message ID Input */}
+      <div style={{ marginBottom: '15px' }}>
+        <label htmlFor="messageId" style={{ display: 'block', marginBottom: '5px' }}>
+          <strong>Arweave Message ID:</strong>
+        </label>
+        <input
+          type="text"
+          id="messageId"
+          value={messageId}
+          onChange={(e) => setMessageId(e.target.value)}
+          placeholder="Enter Arweave message ID..."
+          style={{ width: '100%', padding: '8px', marginBottom: '10px' }}
+        />
+        <button onClick={handleFetchCode} style={{ padding: '8px 16px' }}>
+          Fetch Code
+        </button>
       </div>
+
+      {/* Status Display */}
+      <div style={{ marginBottom: '15px', padding: '10px', backgroundColor: '#f0f0f0', borderRadius: '4px' }}>
+        <strong>Status:</strong> {status || 'Ready'}
+      </div>
+
+      {/* Code Display Area */}
+      {code && (
+        <div style={{ marginBottom: '15px' }}>
+          <h3>Fetched Code:</h3>
+          <div style={{ 
+            border: '1px solid #ddd', 
+            borderRadius: '4px', 
+            padding: '10px', 
+            maxHeight: '200px', 
+            overflow: 'auto', 
+            backgroundColor: '#f8f8f8',
+            fontFamily: 'monospace',
+            fontSize: '12px',
+            whiteSpace: 'pre-wrap'
+          }}>
+            {code}
+          </div>
+        </div>
+      )}
+
+      {/* Task Reference Display */}
+      {taskRef && (
+        <div style={{ marginBottom: '15px', padding: '10px', backgroundColor: '#e0e0e0', borderRadius: '4px' }}>
+          <strong>Task Reference:</strong> {taskRef}
+        </div>
+      )}
+
+      {/* Action Buttons */}
+      <div style={{ marginBottom: '15px' }}>
+        <button 
+          onClick={handleEvaluateCode} 
+          disabled={!connected || !code}
+          style={{ padding: '8px 16px', marginRight: '10px' }}
+        >
+          Evaluate Code
+        </button>
+        <button 
+          onClick={handleFetchResult} 
+          disabled={!requestReference}
+          style={{ padding: '8px 16px' }}
+        >
+          Fetch Result
+        </button>
+      </div>
+
+      {/* AI Result Display */}
+      {llmData && (
+        <div style={{ marginTop: '15px' }}>
+          <h3>AI Evaluation Result:</h3>
+          {resultStatus && (
+            <div style={{ marginBottom: '10px', padding: '5px', backgroundColor: '#d4edda', borderRadius: '4px' }}>
+              <strong>Status:</strong> {resultStatus}
+            </div>
+          )}
+          <div style={{ 
+            border: '1px solid #ddd', 
+            borderRadius: '4px', 
+            padding: '15px', 
+            backgroundColor: '#f9f9f9',
+            whiteSpace: 'pre-wrap',
+            fontFamily: 'Arial, sans-serif',
+            lineHeight: '1.5'
+          }}>
+            {llmData.split('\n').map((line, index) => (
+              <div key={index}>
+                {line.startsWith('##') ? <h2>{line.substring(2).trim()}</h2> : 
+                 line.startsWith('#') ? <h1>{line.substring(1).trim()}</h1> : 
+                 line.startsWith('**') && line.endsWith('**') ? <strong>{line.substring(2, line.length-2)}</strong> : 
+                 line.startsWith('*') && line.endsWith('*') ? <em>{line.substring(1, line.length-1)}</em> : 
+                 line}
+              </div>
+            ))}
+          </div>
+          {attestation && (
+            <div style={{ marginTop: '10px', textAlign: 'right' }}>
+              <button 
+                onClick={() => setShowAttestation(!showAttestation)}
+                style={{ padding: '5px 10px', backgroundColor: '#007bff', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+              >
+                {showAttestation ? 'Hide Attestation' : 'Show Attestation'}
+              </button>
+              {showAttestation && (
+                <div style={{ 
+                  marginTop: '10px', 
+                  padding: '10px', 
+                  backgroundColor: '#f0f0f0', 
+                  borderRadius: '4px', 
+                  textAlign: 'left',
+                  fontFamily: 'monospace',
+                  fontSize: '12px',
+                  whiteSpace: 'pre-wrap',
+                  maxHeight: '300px',
+                  overflow: 'auto'
+                }}>
+                  {attestation}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
